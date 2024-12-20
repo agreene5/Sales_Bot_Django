@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <style>
+        .center-text {
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 10px;
+            display: inline-block;
+            margin-right: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            text-align: left;
+        }
+
+        .form-group input[type="text"],
+        .form-group textarea {
+            width: 300px;
+            height: 200px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-sizing: border-box;
+            font-size: 16px;
+            resize: vertical;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="center-text">
+        <h1 style="font-size: 3em;"> LLM Shopper: </h1>
+
+        <form method="POST" action="/">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label for="items_likes" style="font-size: 1.2em;">Items You Like:</label>
+                {{PreferenceForm.items_likes}}
+            </div>
+
+
+            <div class="form-group">
+                <label for="items_likes" style="font-size: 1.2em;">Items You Dislike:</label>
+                {{PreferenceForm.items_dislikes}}
+            </div>
+
+
+            <br>
+            <!-- <input class="btn" type="submit" name="Submit Preferences"> -->
+            <button>
+                <a href="{% url 'sales_screen' %}" style="text-decoration: none; color: inherit; font-size: 1.5em;">
+                    Confirm Preferences
+                </a>
+            </button>
+
+        </form>
+    </div>
+
+    {% for Preference in Preferences %}
+        <p>{{Preference}}</p>
+    {% endfor %}
+
+</body>
+</html>
