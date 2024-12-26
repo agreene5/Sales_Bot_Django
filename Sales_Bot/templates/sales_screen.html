@@ -1,10 +1,190 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Title</title>
+  <meta charset="UTF-8">
+  <title>Sales Screen</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .cart-section, .llm-section {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 20px;
+    }
+
+    .cart-header {
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .close-button {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .cart-items {
+      margin-bottom: 20px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .cart-total {
+      border-top: 1px solid #eee;
+      padding-top: 20px;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+
+    .llm-header {
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+    }
+
+    #user-messages {
+      min-height: 200px;
+      margin-bottom: 20px;
+    }
+
+    .message {
+      padding: 10px;
+      margin-bottom: 5px;
+    }
+
+    .input-form {
+      display: flex;
+      gap: 10px;
+    }
+
+    .input-field {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    .submit-button {
+      padding: 10px 20px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 20px;
+    }
+  </style>
 </head>
 <body>
-  <h1> Sales Screen (temp) </h1>
+  <div class="container">
+    <div class="cart-section">
+      <div class="cart-header">
+        <h2>Cart</h2>
+        <button class="close-button">×</button>
+      </div>
+      <div id="cart-items" class="cart-items">
+        {% for input in UserInput %}
+          <div class="cart-item">Item {{ forloop.counter }}</div>
+        {% endfor %}
+      </div>
+      <div class="cart-total">
+        Total: $<span id="total">{{ UserInput.count }}</span>
+      </div>
+      <form action="{% url 'checkout_screen' %}" method="POST" id="checkout-form">
+        {% csrf_token %}
+        <input type="hidden" name="time_shopping" id="time-shopping">
+        <input type="hidden" name="items_bought" value="{{ UserInput.count }}">
+        <input type="hidden" name="money_spent" value="{{ UserInput.count }}">
+        <button type="submit" style="font-size: 1.5em;">Check out</button>
+      </form>
+    </div>
+
+    <div class="llm-section">
+      <div class="llm-header">
+        <h2>LLM Shopper</h2>
+      </div>
+      <div id="user-messages">
+        {% for input in UserInput %}
+          <div class="message">User: {{ input.user_input }}</div>
+        {% endfor %}
+      </div>
+      <form class="input-form" method="POST" action="{% url 'sales_screen' %}">
+        {% csrf_token %}
+        {{ UserInputForm.user_input }}
+        <button type="submit" class="submit-button">↑</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    // Store start time in sessionStorage to persist across page reloads
+    if (!sessionStorage.getItem('pageStartTime')) {
+      sessionStorage.setItem('pageStartTime', Date.now());
+    }
+
+    // Track time spent on the page
+    let startTime = parseInt(sessionStorage.getItem('pageStartTime'));
+
+    // Initialize the timer when the page is fully loaded
+    window.onload = function() {
+      console.log("Timer started at:", new Date(startTime));
+    };
+
+    // Calculate time spent and set it in the hidden input field before form submission
+    document.getElementById('checkout-form').addEventListener('submit', function(e) {
+      let endTime = Date.now();
+      let timeSpent = Math.round((endTime - startTime) / 1000); // Convert to seconds and round
+      document.getElementById('time-shopping').value = timeSpent;
+
+      // Clear the start time from sessionStorage
+      sessionStorage.removeItem('pageStartTime');
+
+      // Debug: Log the calculated time
+      console.log("Time spent on page (seconds):", timeSpent);
+      console.log("Hidden input value:", document.getElementById('time-shopping').value);
+    });
+
+    // Modified form submission handler
+    document.querySelector('.input-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+
+      const form = this;
+      const formData = new FormData(form);
+
+      fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
+        },
+      })
+        .then(response => {
+          if (response.ok) {
+            // Don't reset the timer on form submission
+            location.reload();
+          }
+        })
+        .catch(error => console.error('Error:', error));
+    });
+
+    // Add beforeunload event listener to handle page refreshes and closes
+    window.addEventListener('beforeunload', function(e) {
+      // Don't clear sessionStorage here, only clear it on checkout
+    });
+  </script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Title</title>
+    <title>Preferences Screen</title>
     <style>
         .center-text {
             text-align: center;
@@ -52,19 +52,13 @@
 
 
             <br>
-            <!-- <input class="btn" type="submit" name="Submit Preferences"> -->
-            <button>
-                <a href="{% url 'sales_screen' %}" style="text-decoration: none; color: inherit; font-size: 1.5em;">
-                    Confirm Preferences
-                </a>
+            <button type="submit" style="font-size: 1.5em;">
+                Confirm Preferences
             </button>
 
         </form>
     </div>
 
-    {% for Preference in Preferences %}
-        <p>{{Preference}}</p>
-    {% endfor %}
 
 </body>
 </html>
