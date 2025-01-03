@@ -15,7 +15,7 @@ class PreferenceForm(forms.ModelForm):
 
 class UserInputForm(forms.ModelForm):
 
-    user_input = forms.CharField(widget=forms.Textarea(attrs={"placeholder":""}))
+    user_input = forms.CharField(widget=forms.Textarea(attrs={"placeholder":'Enter text and hit "Send" to talk to the Sales Bot'}))
     class Meta:
         model = User_Input
         fields = "__all__"
