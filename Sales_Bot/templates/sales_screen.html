@@ -131,31 +131,272 @@
     </div>
   </div>
 
-  <script>
-    // Store start time in sessionStorage to persist across page reloads
-    if (!sessionStorage.getItem('pageStartTime')) {
-      sessionStorage.setItem('pageStartTime', Date.now());
+<script>
+if (!sessionStorage.getItem('pageStartTime')) {
+    sessionStorage.setItem('pageStartTime', Date.now());
+}
+
+let startTime = parseInt(sessionStorage.getItem('pageStartTime'));
+
+document.addEventListener('DOMContentLoaded', function () {
+    const chatForm = document.getElementById('chat-form');
+    const chatMessages = document.getElementById('chat-messages');
+    const userInput = document.querySelector('textarea[name="user_input"]');
+    const clearButton = document.getElementById('clear-button');
+    const checkoutForm = document.getElementById('checkout-form');
+    const cartItems = document.getElementById('cart-items');
+    const totalElement = document.getElementById('total');
+    let currentResponse = '';
+    let cartTotal = 0.0;
+    let purchaseProcessed = false;
+    let lastMentionedPrice = null;
+    let initialMessageSent = false;
+
+    console.log("Timer started at:", new Date(startTime));
+
+    async function sendInitialMessage() {
+        const initialMessage = "Hello, what items do you have for sale today?";
+        const formData = new FormData(chatForm);
+        formData.set('user_input', initialMessage);
+
+        const assistantMessage = document.createElement('div');
+        assistantMessage.className = 'message llm-message';
+        assistantMessage.textContent = 'Sales Bot: ';
+        chatMessages.appendChild(assistantMessage);
+
+        try {
+            const response = await fetch("{% url 'sales_screen' %}", {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
+                }
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedResponse = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value);
+                const lines = text.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            accumulatedResponse += data.text;
+                            assistantMessage.textContent = `Sales Bot: ${accumulatedResponse}`;
+
+                            const newPrice = extractLastPrice(data.text);
+                            if (newPrice !== null) {
+                                console.log("Found new price in response:", newPrice);
+                                lastMentionedPrice = newPrice;
+                            }
+
+                            if (accumulatedResponse.includes('[BUY:') && !purchaseProcessed) {
+                                console.log("Found BUY tag in response");
+                                const purchaseDetails = extractPurchaseDetails(accumulatedResponse);
+                                console.log("Purchase details:", purchaseDetails);
+
+                                if (purchaseDetails) {
+                                    console.log("Processing purchase:", purchaseDetails.itemName, purchaseDetails.price);
+                                    addToCart(purchaseDetails.itemName, purchaseDetails.price);
+                                    purchaseProcessed = true;
+
+                                    setTimeout(() => {
+                                        clearOnlyChat();
+                                        sendInitialMessage();
+                                    }, 1000);
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
+
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            initialMessageSent = true;
+        } catch (error) {
+            console.error('Error:', error);
+            assistantMessage.textContent += '\nError: Failed to get response.';
+        }
     }
 
-    // Track time spent on the page
-    let startTime = parseInt(sessionStorage.getItem('pageStartTime'));
+    if (!initialMessageSent) {
+        sendInitialMessage();
+    }
 
-    document.addEventListener('DOMContentLoaded', function() {
-      const chatForm = document.getElementById('chat-form');
-      const chatMessages = document.getElementById('chat-messages');
-      const userInput = document.querySelector('textarea[name="user_input"]');
-      const clearButton = document.getElementById('clear-button');
-      const checkoutForm = document.getElementById('checkout-form');
-      let currentResponse = '';
+    function clearEverything() {
+        const formData = new FormData();
+        formData.append('clear', 'true');
+        formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
 
-      console.log("Timer started at:", new Date(startTime));
+        try {
+            fetch("{% url 'sales_screen' %}", {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                }
+            }).then(response => {
+                if (response.ok) {
+                    chatMessages.innerHTML = '';
+                    cartItems.innerHTML = '';
+                    cartTotal = 0.0;
+                    totalElement.textContent = '0.00';
+                    lastMentionedPrice = null;
+                    initialMessageSent = false;
+                    // Don't reset the start time when clearing
+                    updateHiddenInputs();
+                    console.log("Everything cleared successfully.");
+                }
+            });
+        } catch (error) {
+            console.error('Error clearing conversation:', error);
+        }
+    }
 
-      chatForm.addEventListener('submit', async function(e) {
+
+    function clearOnlyChat() {
+        chatMessages.innerHTML = '';
+        initialMessageSent = false;
+    }
+
+    function extractLastPrice(text) {
+        const pricePattern = /\$?(\d+(?:\.\d{1,2})?)/g;
+        let lastPrice = null;
+        let match;
+
+        while ((match = pricePattern.exec(text)) !== null) {
+            lastPrice = parseFloat(match[1]);
+            console.log("Found price:", lastPrice);
+        }
+
+        return lastPrice;
+    }
+
+    function extractPurchaseDetails(text) {
+        console.log("Extracting purchase details from:", text);
+
+        function cleanItemName(name) { // Trying to make varying versions of BUY: format recognizeable
+            return name
+                .replace(/\s*\([^)]*\)/g, '')       // Remove parenthetical expressions
+                .replace(/,?\s*price\s*:?\s*$/i, '') // Remove "price" at the end
+                .replace(/,?\s*cost\s*:?\s*$/i, '')  // Remove "cost" at the end
+                .replace(/,?\s*\$?\s*$/i, '')        // Remove trailing dollar signs
+                .replace(/,\s*$/i, '')               // Remove trailing commas
+                .replace(/\s+/g, ' ')                // Normalize spaces
+                .trim();
+        }
+
+        // Function to find the last price mentioned in the text
+        function findLastPrice(text) {
+            const prices = text.match(/\$(\d+(?:\.\d{2})?)/g);
+            if (prices) {
+                const lastPrice = prices[prices.length - 1].replace('$', '');
+                return parseFloat(lastPrice);
+            }
+            return null;
+        }
+
+        // Check for the (Item, Price) format
+        const priceKeywordMatch = text.match(/\[BUY:\s*\((.*?),\s*Price\)\]/i);
+        if (priceKeywordMatch) {
+            const itemName = cleanItemName(priceKeywordMatch[1]);
+            const foundPrice = findLastPrice(text);
+            if (itemName && foundPrice) {
+                return { itemName, price: foundPrice };
+            }
+        }
+
+        // Check for standard comma-separated price format
+        const standardFormat = text.match(/\[BUY:\s*(.*?),\s*\$?(\d+(?:\.\d{2})?)\]/i);
+        if (standardFormat) {
+            const itemName = cleanItemName(standardFormat[1]);
+            const price = parseFloat(standardFormat[2]);
+            if (itemName && price > 0) {
+                return { itemName, price };
+            }
+        }
+
+        // Handle other potential formats
+        const patterns = [
+            /\[BUY:\s*\((.*?),\s*\$?(\d+(?:\.\d{2})?)\)\]/i,  // [BUY: (Item, $XX.XX)]
+            /\[BUY:\s*(.*?):\s*\$?(\d+(?:\.\d{2})?)\]/i,      // [BUY: Item: $XX.XX]
+            /\[BUY:\s*(.*?)\s*-\s*\$?(\d+(?:\.\d{2})?)\]/i,   // [BUY: Item - $XX.XX]
+            /\[BUY:\s*(.*?)\s+\$?(\d+(?:\.\d{2})?)\]/i        // [BUY: Item $XX.XX]
+        ];
+
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+                const itemName = cleanItemName(match[1]);
+                const price = parseFloat(match[2]);
+                if (itemName && price > 0) {
+                    return { itemName, price };
+                }
+            }
+        }
+
+        // If no match found and lastMentionedPrice exists
+        const itemOnlyMatch = text.match(/\[BUY:\s*(.*?)\]/i);
+        if (itemOnlyMatch && lastMentionedPrice !== null) {
+            const itemName = cleanItemName(itemOnlyMatch[1]);
+            if (itemName) {
+                return { itemName, price: lastMentionedPrice };
+            }
+        }
+
+        console.log("No valid purchase details found");
+        return null;
+    }
+
+    function addToCart(itemName, price) {
+        console.log("Adding to cart:", itemName, "at price:", price);
+        const cartItem = document.createElement('div');
+        cartItem.className = 'cart-item';
+        cartItem.textContent = `${itemName} - $${price.toFixed(2)}`;
+        cartItems.appendChild(cartItem);
+
+        cartTotal += price;
+        totalElement.textContent = cartTotal.toFixed(2);
+        updateHiddenInputs();
+        console.log("Cart updated. New total:", cartTotal);
+    }
+
+    function updateHiddenInputs() {
+        const itemsBought = document.querySelector('input[name="items_bought"]');
+        const moneySpent = document.querySelector('input[name="money_spent"]');
+
+        const itemCount = cartItems.children.length;
+        itemsBought.value = itemCount;
+        moneySpent.value = cartTotal.toFixed(2);
+    }
+
+    checkoutForm.addEventListener('submit', function(e) {
+        let endTime = Date.now();
+        let timeSpent = Math.round((endTime - startTime) / 1000); // Convert to seconds and round
+        document.querySelector('input[name="time_shopping"]').value = timeSpent;
+
+        // Clear the start time from sessionStorage
+        sessionStorage.removeItem('pageStartTime');
+
+    });
+
+
+    chatForm.addEventListener('submit', async function (e) {
         e.preventDefault();
 
         if (!userInput.value.trim()) return;
 
         const formData = new FormData(this);
+        purchaseProcessed = false;
 
         const userMessage = document.createElement('div');
         userMessage.className = 'message user-message';
@@ -168,113 +409,71 @@
         chatMessages.appendChild(assistantMessage);
 
         try {
-          const response = await fetch("{% url 'sales_screen' %}", {
-            method: 'POST',
-            body: formData,
-            headers: {
-              'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
-            }
-          });
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-
-          while (true) {
-            const {value, done} = await reader.read();
-            if (done) break;
-
-            const text = decoder.decode(value);
-            const lines = text.split('\n');
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  currentResponse += data.text;
-                  assistantMessage.textContent = `Assistant: ${currentResponse}`;
-                } catch (e) {
-                  console.error('Error parsing SSE data:', e);
+            const response = await fetch("{% url 'sales_screen' %}", {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': formData.get('csrfmiddlewaretoken'),
                 }
-              }
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedResponse = '';
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value);
+                const lines = text.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            accumulatedResponse += data.text;
+                            assistantMessage.textContent = `Assistant: ${accumulatedResponse}`;
+
+                            const newPrice = extractLastPrice(data.text);
+                            if (newPrice !== null) {
+                                console.log("Found new price in response:", newPrice);
+                                lastMentionedPrice = newPrice;
+                            }
+
+                            if (accumulatedResponse.includes('[BUY:') && !purchaseProcessed) {
+                                console.log("Found BUY tag in response");
+                                const purchaseDetails = extractPurchaseDetails(accumulatedResponse);
+                                console.log("Purchase details:", purchaseDetails);
+
+                                if (purchaseDetails) {
+                                    console.log("Processing purchase:", purchaseDetails.itemName, purchaseDetails.price);
+                                    addToCart(purchaseDetails.itemName, purchaseDetails.price);
+                                    purchaseProcessed = true;
+
+                                    setTimeout(() => {
+                                        clearOnlyChat();
+                                        sendInitialMessage();
+                                    }, 1000);
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
             }
-          }
 
-          userInput.value = '';
-          currentResponse = '';
-          chatMessages.scrollTop = chatMessages.scrollHeight;
-
-          updateCartAndTotal();
-
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            userInput.value = '';
         } catch (error) {
-          console.error('Error:', error);
+            console.error('Error:', error);
+            assistantMessage.textContent += '\nError: Failed to get response.';
         }
-      });
-
-      clearButton.addEventListener('click', async function() {
-        const formData = new FormData();
-        formData.append('clear', 'true');
-        formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
-
-        try {
-          const response = await fetch("{% url 'sales_screen' %}", {
-            method: 'POST',
-            body: formData,
-            headers: {
-              'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
-            }
-          });
-
-          if (response.ok) {
-            chatMessages.innerHTML = '';
-            updateCartAndTotal();
-          }
-        } catch (error) {
-          console.error('Error clearing conversation:', error);
-        }
-      });
-
-      checkoutForm.addEventListener('submit', function(e) {
-        let endTime = Date.now();
-        let timeSpent = Math.round((endTime - startTime) / 1000); // Convert to seconds and round
-        document.getElementById('time-shopping').value = timeSpent;
-
-        // Clear the start time from sessionStorage
-        sessionStorage.removeItem('pageStartTime');
-
-        // Debug: Log the calculated time
-        console.log("Time spent on page (seconds):", timeSpent);
-        console.log("Hidden input value:", document.getElementById('time-shopping').value);
-      });
-
-      function updateCartAndTotal() {
-        const cartItems = document.getElementById('cart-items');
-        const total = document.getElementById('total');
-        const itemsBought = document.querySelector('input[name="items_bought"]');
-        const moneySpent = document.querySelector('input[name="money_spent"]');
-
-        // Count user messages as items
-        const itemCount = chatMessages.querySelectorAll('.user-message').length;
-
-        // Update cart items
-        cartItems.innerHTML = '';
-        for (let i = 0; i < itemCount; i++) {
-          const cartItem = document.createElement('div');
-          cartItem.className = 'cart-item';
-          cartItem.textContent = `Item ${i + 1}`;
-          cartItems.appendChild(cartItem);
-        }
-
-        // Update total and hidden inputs
-        total.textContent = itemCount;
-        itemsBought.value = itemCount;
-        moneySpent.value = itemCount;
-      }
     });
 
-    // Add beforeunload event listener to handle page refreshes and closes
-    window.addEventListener('beforeunload', function(e) {
-      // Don't clear sessionStorage here, only clear it on checkout
-    });
-  </script>
+    clearButton.addEventListener('click', clearEverything);
+});
+</script>
 </body>
 </html>

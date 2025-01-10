@@ -25,38 +25,95 @@ def index(request):
     return render(request, "preference_screen.html", context)
 
 
-def build_context(previous_messages, new_message):
-    context = ""
-    for msg in previous_messages:
-        context += f"User: {msg.user_input}\n"
-        if msg.llm_response:
-            context += f"Assistant: {msg.llm_response}\n"
+def build_context(previous_messages, new_message, reset_context=False):
+    conversation_history = []
 
-    context += f"User: {new_message}\n"
-    return context
+    reminder_context = """
+    IMPORTANT INSTRUCTIONS:
+    1. After processing a purchase with [BUY: (Item_Name, Price)], treat it as completed
+    2. Focus on responding to the current request
+    3. Remember only your last response to maintain conversation flow
+    """
+    conversation_history.append({"role": "system", "content": reminder_context})
+
+    if previous_messages and not reset_context:
+        for msg in previous_messages:
+            conversation_history.append({
+                "role": "user",
+                "content": msg.user_input
+            })
+            if msg.llm_response:
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": msg.llm_response
+                })
+    elif previous_messages and reset_context:
+        last_message = previous_messages[-1]
+        if last_message.llm_response:
+            conversation_history.append({
+                "role": "assistant",
+                "content": last_message.llm_response
+            })
+
+    conversation_history.append({
+        "role": "user",
+        "content": new_message
+    })
+
+    return format_context(conversation_history)
+
+def format_context(conversation_history):
+    formatted_context = "SYSTEM INSTRUCTIONS:\n" + conversation_history[0]['content'] + "\n\n"
+    formatted_context += "CONVERSATION:\n" + "\n".join([
+        f"{msg['role'].upper()}: {msg['content'].strip()}"
+        for msg in conversation_history[1:]
+    ])
+    return formatted_context
 
 
 def stream_response(response_stream):
-    for chunk in response_stream:
-        if 'response' in chunk:
-            yield f"data: {json.dumps({'text': chunk['response']})}\n\n"
+    try:
+        accumulated_response = ""
+        for chunk in response_stream:
+            if 'response' in chunk:
+                accumulated_response += chunk['response']
+                yield f"data: {json.dumps({'text': chunk['response'], 'full_response': accumulated_response})}\n\n"
+    except Exception as e:
+        print(f"Error in stream_response: {str(e)}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
 def sales_screen(request):
     form = UserInputForm()
-    user_inputs = User_Input.objects.all().order_by('timestamp')
+    user_inputs = User_Input.objects.order_by('-timestamp')[:20]
+    user_inputs = list(user_inputs)
+    user_inputs.reverse()
 
-    latest_preferences = Preference.objects.last()  # Gets the most recent preference entry
+    latest_preferences = Preference.objects.last()
 
-    system_prompt = f"You are an eccentric sales bot who's purpose is to sell unique and relevant items to the user. \
-    You talk like a traditional salesman and use everything you can to try and strike a deal. That being said, you are \
-    shrewd in your dealings and won't accept unprofitable sales. Here are the items the user likes:\
-    {latest_preferences.items_likes if latest_preferences else 'None'} and here are the items the user dislikes:\
-    {latest_preferences.items_dislikes if latest_preferences else 'None'}. Sell the user items one at a time, only \
-    moving to the next item if the user purchases or rejects the current item. Also, keep your responses concise and \
-    don't ramble for too long"
+    SYSTEM_PROMPT = '''
+    You are a focused yet wacky sales bot that:
+    1. Handles one interaction at a time
+    2. After completing a [BUY: (Item_Name, Price)], start fresh
+    3. Only remembers the last purchase
+    4. Focuses on current requests and new items
 
-    context = {"user_input_form": form, "user_inputs": user_inputs}
+    Current user preferences:
+    - Likes: {likes}
+    - Dislikes: {dislikes}
+
+    Remember: After processing a purchase, treat it as a new conversation while remembering only the last purchase details.
+    '''
+
+    system_prompt = SYSTEM_PROMPT.format(
+        likes=latest_preferences.items_likes if latest_preferences else "None",
+        dislikes=latest_preferences.items_dislikes if latest_preferences else "None"
+    )
+
+    context = {
+        "user_input_form": form,
+        "user_inputs": user_inputs,
+    }
 
     if request.method == "POST":
         if request.POST.get('clear'):
@@ -66,18 +123,25 @@ def sales_screen(request):
         form = UserInputForm(request.POST)
         if form.is_valid():
             user_input = form.save(commit=False)
+            user_input.save()
 
             try:
-                previous_messages = User_Input.objects.all().order_by('-timestamp')[:5]
-                prompt = build_context(previous_messages, user_input.user_input)
+                previous_messages = list(User_Input.objects.order_by('-timestamp')[:15])
+                previous_messages.reverse()
 
-                user_input.save()
+                reset_context = request.POST.get('reset_context') == 'true'
+
+                prompt = build_context(
+                    previous_messages,
+                    user_input.user_input,
+                    reset_context=reset_context
+                )
 
                 response_stream = client.generate(
-                    model = "llama3.2:3b",
-                    system = system_prompt,
-                    prompt = prompt,
-                    stream = True
+                    model="gemma2:9b", #gemma2:9b #llama3.1:8b #llama3.2:3b
+                    system=system_prompt,
+                    prompt=prompt,
+                    stream=True,
                 )
 
                 response = StreamingHttpResponse(
@@ -101,7 +165,7 @@ def checkout_screen(request):
     if request.method == "POST":
         time_shopping = float(request.POST.get("time_shopping", 0.0))
         items_bought = int(request.POST.get("items_bought", 0))
-        money_spent = int(request.POST.get("money_spent", 0))
+        money_spent = float(request.POST.get("money_spent", 0))
 
         Checkout.objects.create(
             time_shopping=time_shopping,
